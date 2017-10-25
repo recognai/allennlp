@@ -55,7 +55,7 @@ class JsonlClassificationReader(DatasetReader):
             for line in tqdm.tqdm(snli_file):
                 example = json.loads(line)
                 input = example[self._input]
-                label = example[self._gold_label]
+                label = str(example[self._gold_label])
                 instances.append(self.text_to_instance(input, label))
         if not instances:
             raise ConfigurationError("No instances were read from the given filepath {}. "
