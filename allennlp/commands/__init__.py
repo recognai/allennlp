@@ -20,7 +20,8 @@ DEFAULT_PREDICTORS = {
         'decomposable_attention': 'textual-entailment',
         'bidaf': 'machine-comprehension',
         'simple_tagger': 'simple-tagger',
-        'crf_tagger': 'crf-tagger'
+        'crf_tagger': 'crf-tagger',
+        'sequence_classifier': 'sequence_classifier'
 }
 
 def main(prog: str = None,
