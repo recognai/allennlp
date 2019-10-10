@@ -7,8 +7,8 @@ via a REST API or similar.
 
 .. toctree::
 
-   allennlp.service.predictors
-   allennlp.service.server_sanic
+   allennlp.service.server_simple
+   allennlp.service.config_explorer
 
 .. automodule:: allennlp.service
    :members:

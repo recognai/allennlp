@@ -6,12 +6,16 @@ others are AllenNLP modules.
 
 The available Seq2Seq encoders are
 
-* `"gru" <http://pytorch.org/docs/master/nn.html#torch.nn.GRU>`_
-* `"lstm" <http://pytorch.org/docs/master/nn.html#torch.nn.LSTM>`_
-* `"rnn" <http://pytorch.org/docs/master/nn.html#torch.nn.RNN>`_
+* `"gru" <https://pytorch.org/docs/master/nn.html#torch.nn.GRU>`_
+* `"lstm" <https://pytorch.org/docs/master/nn.html#torch.nn.LSTM>`_
+* `"rnn" <https://pytorch.org/docs/master/nn.html#torch.nn.RNN>`_
 * :class:`"augmented_lstm" <allennlp.modules.augmented_lstm.AugmentedLstm>`
 * :class:`"alternating_lstm" <allennlp.modules.stacked_alternating_lstm.StackedAlternatingLstm>`
 * :class:`"alternating_highway_lstm" <allennlp.modules.stacked_alternating_lstm.StackedAlternatingLstm> (GPU only)`
+* :class:`"stacked_self_attention" <allennlp.modules.stacked_self_attention.StackedSelfAttentionEncoder>`
+* :class:`"multi_head_self_attention" <allennlp.modules.multi_head_self_attention.MultiHeadSelfAttention>`
+* :class:`"pass_through" <allennlp.modules.pass_through_encoder.PassThroughEncoder>`
+* :class:`"feedforward" <allennlp.modules.feedforward_encoder.FeedforwardEncoder>`
 """
 
 from typing import Type
@@ -22,12 +26,24 @@ import torch
 from allennlp.common import Params
 from allennlp.common.checks import ConfigurationError
 from allennlp.modules.augmented_lstm import AugmentedLstm
+from allennlp.modules.seq2seq_encoders.bidirectional_language_model_transformer import (
+    BidirectionalLanguageModelTransformer,
+)
+from allennlp.modules.seq2seq_encoders.gated_cnn_encoder import GatedCnnEncoder
 from allennlp.modules.seq2seq_encoders.intra_sentence_attention import IntraSentenceAttentionEncoder
 from allennlp.modules.seq2seq_encoders.pytorch_seq2seq_wrapper import PytorchSeq2SeqWrapper
 from allennlp.modules.seq2seq_encoders.seq2seq_encoder import Seq2SeqEncoder
 from allennlp.modules.stacked_alternating_lstm import StackedAlternatingLstm
+from allennlp.modules.stacked_bidirectional_lstm import StackedBidirectionalLstm
+from allennlp.modules.seq2seq_encoders.stacked_self_attention import StackedSelfAttentionEncoder
+from allennlp.modules.seq2seq_encoders.multi_head_self_attention import MultiHeadSelfAttention
+from allennlp.modules.seq2seq_encoders.pass_through_encoder import PassThroughEncoder
+from allennlp.modules.seq2seq_encoders.feedforward_encoder import FeedForwardEncoder
+from allennlp.modules.seq2seq_encoders.qanet_encoder import QaNetEncoder
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+
+logger = logging.getLogger(__name__)
+
 
 class _Seq2SeqWrapper:
     """
@@ -55,6 +71,7 @@ class _Seq2SeqWrapper:
     ``PytorchSeq2SeqWrapper``.  This lets us use this class in the registry and have everything just
     work.
     """
+
     PYTORCH_MODELS = [torch.nn.GRU, torch.nn.LSTM, torch.nn.RNN]
 
     def __init__(self, module_class: Type[torch.nn.modules.RNNBase]) -> None:
@@ -63,27 +80,20 @@ class _Seq2SeqWrapper:
     def __call__(self, **kwargs) -> PytorchSeq2SeqWrapper:
         return self.from_params(Params(kwargs))
 
+    # Logic requires custom from_params
     def from_params(self, params: Params) -> PytorchSeq2SeqWrapper:
-        if not params.pop('batch_first', True):
+        if not params.pop_bool("batch_first", True):
             raise ConfigurationError("Our encoder semantics assumes batch is always first!")
         if self._module_class in self.PYTORCH_MODELS:
-            params['batch_first'] = True
-        module = self._module_class(**params.as_dict())
-        return PytorchSeq2SeqWrapper(module)
+            params["batch_first"] = True
+        stateful = params.pop_bool("stateful", False)
+        module = self._module_class(**params.as_dict(infer_type_and_cast=True))
+        return PytorchSeq2SeqWrapper(module, stateful=stateful)
 
-# pylint: disable=protected-access
+
 Seq2SeqEncoder.register("gru")(_Seq2SeqWrapper(torch.nn.GRU))
 Seq2SeqEncoder.register("lstm")(_Seq2SeqWrapper(torch.nn.LSTM))
 Seq2SeqEncoder.register("rnn")(_Seq2SeqWrapper(torch.nn.RNN))
 Seq2SeqEncoder.register("augmented_lstm")(_Seq2SeqWrapper(AugmentedLstm))
 Seq2SeqEncoder.register("alternating_lstm")(_Seq2SeqWrapper(StackedAlternatingLstm))
-if torch.cuda.is_available():
-    try:
-        # TODO(Mark): Remove this once we have a CPU wrapper for the kernel/switch to ATen.
-        from allennlp.modules.alternating_highway_lstm import AlternatingHighwayLSTM
-        Seq2SeqEncoder.register("alternating_highway_lstm_cuda")(_Seq2SeqWrapper(AlternatingHighwayLSTM))
-    except (ModuleNotFoundError, FileNotFoundError):
-        logger.debug("allennlp could not register 'alternating_highway_lstm_cuda' - installation "
-                     "needs to be completed manually if you have pip-installed the package. "
-                     "Run ``bash make.sh`` in the 'custom_extensions' module on a machine with a "
-                     "GPU.")
+Seq2SeqEncoder.register("stacked_bidirectional_lstm")(_Seq2SeqWrapper(StackedBidirectionalLstm))

@@ -14,6 +14,7 @@ allennlp.data.tokenizers
 * :ref:`Tokenizer<tokenizer>`
 * :ref:`WordTokenizer<word-tokenizer>`
 * :ref:`CharacterTokenizer<character-tokenizer>`
+* :ref:`PretrainedTransformerTokenizer<pretrained-transformer-tokenizer>`
 * :ref:`WordFilter<word-filter>`
 * :ref:`WordSplitter<word-splitter>`
 * :ref:`WordStemmer<word-stemmer>`
@@ -36,6 +37,12 @@ allennlp.data.tokenizers
    :undoc-members:
    :show-inheritance:
 
+.. _pretrained-transformer-tokenizer:
+.. automodule:: allennlp.data.tokenizers.pretrained_transformer_tokenizer
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 .. _word-filter:
 .. automodule:: allennlp.data.tokenizers.word_filter
    :members:
@@ -54,3 +61,8 @@ allennlp.data.tokenizers
    :undoc-members:
    :show-inheritance:
 
+.. _sentence-splitter:
+.. automodule:: allennlp.data.tokenizers.sentence_splitter
+   :members:
+   :undoc-members:
+   :show-inheritance:

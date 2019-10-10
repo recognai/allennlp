@@ -2,7 +2,7 @@ from typing import Tuple
 
 from overrides import overrides
 
-from allennlp.common import squad_eval
+from allennlp.tools import squad_eval
 from allennlp.training.metrics.metric import Metric
 
 
@@ -13,6 +13,7 @@ class SquadEmAndF1(Metric):
     strings labeled in the data, and computed exact match and F1 score using the official SQuAD
     evaluation script.
     """
+
     def __init__(self) -> None:
         self._total_em = 0.0
         self._total_f1 = 0.0
@@ -27,13 +28,11 @@ class SquadEmAndF1(Metric):
             The value to average.
         """
         exact_match = squad_eval.metric_max_over_ground_truths(
-                squad_eval.exact_match_score,
-                best_span_string,
-                answer_strings)
+            squad_eval.exact_match_score, best_span_string, answer_strings
+        )
         f1_score = squad_eval.metric_max_over_ground_truths(
-                squad_eval.f1_score,
-                best_span_string,
-                answer_strings)
+            squad_eval.f1_score, best_span_string, answer_strings
+        )
         self._total_em += exact_match
         self._total_f1 += f1_score
         self._count += 1
@@ -57,3 +56,6 @@ class SquadEmAndF1(Metric):
         self._total_em = 0.0
         self._total_f1 = 0.0
         self._count = 0
+
+    def __str__(self):
+        return f"SquadEmAndF1(em={self._total_em}, f1={self._total_f1})"

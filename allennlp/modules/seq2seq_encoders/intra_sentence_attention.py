@@ -1,9 +1,9 @@
 from overrides import overrides
 import torch
+from torch.nn import Linear
 
-from allennlp.common import Params
 from allennlp.common.checks import ConfigurationError
-from allennlp.modules.matrix_attention import MatrixAttention
+from allennlp.modules.matrix_attention.legacy_matrix_attention import LegacyMatrixAttention
 from allennlp.modules.seq2seq_encoders.seq2seq_encoder import Seq2SeqEncoder
 from allennlp.modules.similarity_functions import DotProductSimilarity, SimilarityFunction
 from allennlp.modules.similarity_functions import MultiHeadedSimilarity
@@ -43,33 +43,49 @@ class IntraSentenceAttentionEncoder(Seq2SeqEncoder):
         :func:`~allennlp.nn.util.combine_tensors`; see that function for more detail on exactly how
         this works, but some simple examples are ``"1,2"`` for concatenation (the default),
         ``"1+2"`` for adding the two, or ``"2"`` for only keeping the attention representation.
+    output_dim : ``int``, optional (default = None)
+        The dimension of an optional output projection.
     """
-    def __init__(self,
-                 input_dim: int,
-                 projection_dim: int = None,
-                 similarity_function: SimilarityFunction = DotProductSimilarity(),
-                 num_attention_heads: int = 1,
-                 combination: str = '1,2') -> None:
-        super(IntraSentenceAttentionEncoder, self).__init__()
+
+    def __init__(
+        self,
+        input_dim: int,
+        projection_dim: int = None,
+        similarity_function: SimilarityFunction = DotProductSimilarity(),
+        num_attention_heads: int = 1,
+        combination: str = "1,2",
+        output_dim: int = None,
+    ) -> None:
+        super().__init__()
         self._input_dim = input_dim
         if projection_dim:
             self._projection = torch.nn.Linear(input_dim, projection_dim)
         else:
             self._projection = lambda x: x
             projection_dim = input_dim
-        self._matrix_attention = MatrixAttention(similarity_function)
+        self._matrix_attention = LegacyMatrixAttention(similarity_function)
         self._num_attention_heads = num_attention_heads
         if isinstance(similarity_function, MultiHeadedSimilarity):
             if num_attention_heads == 1:
-                raise ConfigurationError("Similarity function has multiple heads but encoder doesn't")
+                raise ConfigurationError(
+                    "Similarity function has multiple heads but encoder doesn't"
+                )
             if num_attention_heads != similarity_function.num_heads:
-                raise ConfigurationError("Number of heads don't match between similarity function "
-                                         "and encoder: %d, %d" % (num_attention_heads,
-                                                                  similarity_function.num_heads))
+                raise ConfigurationError(
+                    "Number of heads don't match between similarity function "
+                    "and encoder: %d, %d" % (num_attention_heads, similarity_function.num_heads)
+                )
         elif num_attention_heads > 1:
             raise ConfigurationError("Encoder has multiple heads but similarity function doesn't")
         self._combination = combination
-        self._output_dim = util.get_combined_dim(combination, [input_dim, projection_dim])
+
+        combined_dim = util.get_combined_dim(combination, [input_dim, projection_dim])
+        if output_dim:
+            self._output_projection = Linear(combined_dim, output_dim)
+            self._output_dim = output_dim
+        else:
+            self._output_projection = lambda x: x
+            self._output_dim = combined_dim
 
     @overrides
     def get_input_dim(self) -> int:
@@ -79,7 +95,12 @@ class IntraSentenceAttentionEncoder(Seq2SeqEncoder):
     def get_output_dim(self) -> int:
         return self._output_dim
 
-    def forward(self, tokens: torch.Tensor, mask: torch.Tensor):  # pylint: disable=arguments-differ
+    @overrides
+    def is_bidirectional(self):
+        return False
+
+    @overrides
+    def forward(self, tokens: torch.Tensor, mask: torch.Tensor):
         batch_size, sequence_length, _ = tokens.size()
         # Shape: (batch_size, sequence_length, sequence_length)
         similarity_matrix = self._matrix_attention(tokens, tokens)
@@ -92,7 +113,7 @@ class IntraSentenceAttentionEncoder(Seq2SeqEncoder):
             similarity_matrix = similarity_matrix.permute(0, 1, 3, 2)
 
         # Shape: (batch_size, sequence_length, [num_heads,] sequence_length)
-        intra_sentence_attention = util.last_dim_softmax(similarity_matrix.contiguous(), mask)
+        intra_sentence_attention = util.masked_softmax(similarity_matrix.contiguous(), mask)
 
         # Shape: (batch_size, sequence_length, projection_dim)
         output_token_representation = self._projection(tokens)
@@ -109,8 +130,7 @@ class IntraSentenceAttentionEncoder(Seq2SeqEncoder):
             output_token_representation = output_token_representation.permute(0, 2, 1, 3)
 
         # Shape: (batch_size, sequence_length, [num_heads,] projection_dim [/ num_heads])
-        attended_sentence = util.weighted_sum(output_token_representation,
-                                              intra_sentence_attention)
+        attended_sentence = util.weighted_sum(output_token_representation, intra_sentence_attention)
 
         if self._num_attention_heads > 1:
             # Here we concatenate the weighted representation for each head.  We'll accomplish this
@@ -120,18 +140,4 @@ class IntraSentenceAttentionEncoder(Seq2SeqEncoder):
 
         # Shape: (batch_size, sequence_length, combination_dim)
         combined_tensors = util.combine_tensors(self._combination, [tokens, attended_sentence])
-        return combined_tensors
-
-    @classmethod
-    def from_params(cls, params: Params) -> 'IntraSentenceAttentionEncoder':
-        input_dim = params.pop('input_dim')
-        projection_dim = params.pop('projection_dim', None)
-        similarity_function = SimilarityFunction.from_params(params.pop('similarity_function', {}))
-        num_attention_heads = params.pop('num_attention_heads', 1)
-        combination = params.pop('combination', '1,2')
-        params.assert_empty(cls.__name__)
-        return cls(input_dim=input_dim,
-                   projection_dim=projection_dim,
-                   similarity_function=similarity_function,
-                   num_attention_heads=num_attention_heads,
-                   combination=combination)
+        return self._output_projection(combined_tensors)

@@ -1,47 +1,37 @@
-from typing import List
-import math
+from collections import deque
+from typing import Iterable, Deque
+import logging
 import random
 
-from overrides import overrides
-
-from allennlp.common import Params
-from allennlp.common.util import group_by_count
-from allennlp.data.iterators.data_iterator import DataIterator
-from allennlp.data.dataset import Dataset
+from allennlp.common.util import lazy_groups_of
 from allennlp.data.instance import Instance
+from allennlp.data.iterators.data_iterator import DataIterator
+from allennlp.data.dataset import Batch
+
+logger = logging.getLogger(__name__)
 
 
 @DataIterator.register("basic")
 class BasicIterator(DataIterator):
     """
-    A very basic iterator, which takes a dataset, pads all of its instances to the maximum lengths
-    of the relevant fields across the whole dataset, and yields fixed size batches.
+    A very basic iterator that takes a dataset, possibly shuffles it, and creates fixed sized batches.
 
-    Parameters
-    ----------
-    batch_size : int, optional, (default = 32)
-        The size of each batch of instances yielded when calling the iterator.
+    It takes the same parameters as :class:`allennlp.data.iterators.DataIterator`
     """
-    def __init__(self, batch_size: int = 32) -> None:
-        self._batch_size = batch_size
 
-    @overrides
-    def get_num_batches(self, dataset: Dataset) -> int:
-        return math.ceil(len(dataset.instances) / self._batch_size)
-
-    @overrides
-    def _create_batches(self, dataset: Dataset, shuffle: bool) -> List[List[Instance]]:
-        instances = dataset.instances
-        if shuffle:
-            random.shuffle(instances)
-        grouped_instances = group_by_count(instances, self._batch_size, None)
-        # The last group might have not been full, so we check if any of the instances
-        # are None, which is how group_by_count pads non-complete batches.
-        grouped_instances[-1] = [instance for instance in grouped_instances[-1] if instance is not None]
-        return grouped_instances
-
-    @classmethod
-    def from_params(cls, params: Params) -> 'BasicIterator':
-        batch_size = params.pop('batch_size', 32)
-        params.assert_empty(cls.__name__)
-        return cls(batch_size=batch_size)
+    def _create_batches(self, instances: Iterable[Instance], shuffle: bool) -> Iterable[Batch]:
+        # First break the dataset into memory-sized lists:
+        for instance_list in self._memory_sized_lists(instances):
+            if shuffle:
+                random.shuffle(instance_list)
+            iterator = iter(instance_list)
+            excess: Deque[Instance] = deque()
+            # Then break each memory-sized list into batches.
+            for batch_instances in lazy_groups_of(iterator, self._batch_size):
+                for possibly_smaller_batches in self._ensure_batch_is_sufficiently_small(
+                    batch_instances, excess
+                ):
+                    batch = Batch(possibly_smaller_batches)
+                    yield batch
+            if excess:
+                yield Batch(excess)

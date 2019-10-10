@@ -2,7 +2,6 @@ from typing import List
 
 from overrides import overrides
 
-from allennlp.common import Params
 from allennlp.data.tokenizers.token import Token
 from allennlp.data.tokenizers.tokenizer import Tokenizer
 
@@ -33,11 +32,15 @@ class CharacterTokenizer(Tokenizer):
         If given, these tokens will be added to the end of every string we tokenize.  If using byte
         encoding, this should actually be a ``List[int]``, not a ``List[str]``.
     """
-    def __init__(self,
-                 byte_encoding: str = None,
-                 lowercase_characters: bool = False,
-                 start_tokens: List[str] = None,
-                 end_tokens: List[str] = None) -> None:
+
+    def __init__(
+        self,
+        byte_encoding: str = None,
+        lowercase_characters: bool = False,
+        start_tokens: List[str] = None,
+        end_tokens: List[str] = None,
+    ) -> None:
+        # TODO(brendanr): Add length truncation.
         self._byte_encoding = byte_encoding
         self._lowercase_characters = lowercase_characters
         self._start_tokens = start_tokens or []
@@ -70,14 +73,7 @@ class CharacterTokenizer(Tokenizer):
             tokens.append(token)
         return tokens
 
-    @classmethod
-    def from_params(cls, params: Params) -> 'CharacterTokenizer':
-        byte_encoding = params.pop('byte_encoding', None)
-        lowercase_characters = params.pop('lowercase_characters', False)
-        start_tokens = params.pop('start_tokens', None)
-        end_tokens = params.pop('end_tokens', None)
-        params.assert_empty(cls.__name__)
-        return cls(byte_encoding=byte_encoding,
-                   lowercase_characters=lowercase_characters,
-                   start_tokens=start_tokens,
-                   end_tokens=end_tokens)
+    def __eq__(self, other) -> bool:
+        if isinstance(self, other.__class__):
+            return self.__dict__ == other.__dict__
+        return NotImplemented

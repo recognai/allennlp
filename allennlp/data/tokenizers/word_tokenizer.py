@@ -2,7 +2,6 @@ from typing import List
 
 from overrides import overrides
 
-from allennlp.common import Params
 from allennlp.data.tokenizers.token import Token
 from allennlp.data.tokenizers.tokenizer import Tokenizer
 from allennlp.data.tokenizers.word_filter import WordFilter, PassThroughWordFilter
@@ -35,26 +34,16 @@ class WordTokenizer(Tokenizer):
         If given, these tokens will be added to the beginning of every string we tokenize.
     end_tokens : ``List[str]``, optional
         If given, these tokens will be added to the end of every string we tokenize.
-    language : ``str``, optional
-        We use spacy to tokenize strings; this option specifies which language to use.  By default
-        we use English.
-    pos_tags : ``bool``, optional
-        By default we do not load spacy's tagging model, to save loading time and memory.  Set this
-        to ``True`` if you want to have access to spacy's POS tags in the returned tokens.
-    parse : ``bool``, optional
-        By default we do not load spacy's parsing model, to save loading time and memory.  Set this
-        to ``True`` if you want to have access to spacy's dependency parse tags in the returned
-        tokens.
-    ner : ``bool``, optional
-        By default we do not load spacy's parsing model, to save loading time and memory.  Set this
-        to ``True`` if you want to have access to spacy's NER tags in the returned tokens.
     """
-    def __init__(self,
-                 word_splitter: WordSplitter = None,
-                 word_filter: WordFilter = PassThroughWordFilter(),
-                 word_stemmer: WordStemmer = PassThroughWordStemmer(),
-                 start_tokens: List[str] = None,
-                 end_tokens: List[str] = None) -> None:
+
+    def __init__(
+        self,
+        word_splitter: WordSplitter = None,
+        word_filter: WordFilter = PassThroughWordFilter(),
+        word_stemmer: WordStemmer = PassThroughWordStemmer(),
+        start_tokens: List[str] = None,
+        end_tokens: List[str] = None,
+    ) -> None:
         self._word_splitter = word_splitter or SpacyWordSplitter()
         self._word_filter = word_filter
         self._word_stemmer = word_stemmer
@@ -73,6 +62,14 @@ class WordTokenizer(Tokenizer):
         stemming or stopword removal, depending on the parameters given to the constructor.
         """
         words = self._word_splitter.split_words(text)
+        return self._filter_and_stem(words)
+
+    @overrides
+    def batch_tokenize(self, texts: List[str]) -> List[List[Token]]:
+        batched_words = self._word_splitter.batch_split_words(texts)
+        return [self._filter_and_stem(words) for words in batched_words]
+
+    def _filter_and_stem(self, words: List[Token]) -> List[Token]:
         filtered_words = self._word_filter.filter_words(words)
         stemmed_words = [self._word_stemmer.stem_word(word) for word in filtered_words]
         for start_token in self._start_tokens:
@@ -80,17 +77,3 @@ class WordTokenizer(Tokenizer):
         for end_token in self._end_tokens:
             stemmed_words.append(Token(end_token, -1))
         return stemmed_words
-
-    @classmethod
-    def from_params(cls, params: Params) -> 'WordTokenizer':
-        word_splitter = WordSplitter.from_params(params.pop('word_splitter', {}))
-        word_filter = WordFilter.from_params(params.pop('word_filter', {}))
-        word_stemmer = WordStemmer.from_params(params.pop('word_stemmer', {}))
-        start_tokens = params.pop('start_tokens', None)
-        end_tokens = params.pop('end_tokens', None)
-        params.assert_empty(cls.__name__)
-        return cls(word_splitter=word_splitter,
-                   word_filter=word_filter,
-                   word_stemmer=word_stemmer,
-                   start_tokens=start_tokens,
-                   end_tokens=end_tokens)

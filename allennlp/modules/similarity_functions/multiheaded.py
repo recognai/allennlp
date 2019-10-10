@@ -2,7 +2,6 @@ from overrides import overrides
 import torch
 from torch.nn.parameter import Parameter
 
-from allennlp.common import Params
 from allennlp.common.checks import ConfigurationError
 from allennlp.modules.similarity_functions.similarity_function import SimilarityFunction
 from allennlp.modules.similarity_functions.dot_product import DotProductSimilarity
@@ -46,32 +45,39 @@ class MultiHeadedSimilarity(SimilarityFunction):
         The ``SimilarityFunction`` to call on the projected, multi-headed tensors.  The default is
         to use a dot product.
     """
-    def __init__(self,
-                 num_heads: int,
-                 tensor_1_dim: int,
-                 tensor_1_projected_dim: int = None,
-                 tensor_2_dim: int = None,
-                 tensor_2_projected_dim: int = None,
-                 internal_similarity: SimilarityFunction = DotProductSimilarity()) -> None:
-        super(MultiHeadedSimilarity, self).__init__()
+
+    def __init__(
+        self,
+        num_heads: int,
+        tensor_1_dim: int,
+        tensor_1_projected_dim: int = None,
+        tensor_2_dim: int = None,
+        tensor_2_projected_dim: int = None,
+        internal_similarity: SimilarityFunction = DotProductSimilarity(),
+    ) -> None:
+        super().__init__()
         self.num_heads = num_heads
         self._internal_similarity = internal_similarity
         tensor_1_projected_dim = tensor_1_projected_dim or tensor_1_dim
         tensor_2_dim = tensor_2_dim or tensor_1_dim
         tensor_2_projected_dim = tensor_2_projected_dim or tensor_2_dim
         if tensor_1_projected_dim % num_heads != 0:
-            raise ConfigurationError("Projected dimension not divisible by number of heads: %d, %d"
-                                     % (tensor_1_projected_dim, num_heads))
+            raise ConfigurationError(
+                "Projected dimension not divisible by number of heads: %d, %d"
+                % (tensor_1_projected_dim, num_heads)
+            )
         if tensor_2_projected_dim % num_heads != 0:
-            raise ConfigurationError("Projected dimension not divisible by number of heads: %d, %d"
-                                     % (tensor_2_projected_dim, num_heads))
+            raise ConfigurationError(
+                "Projected dimension not divisible by number of heads: %d, %d"
+                % (tensor_2_projected_dim, num_heads)
+            )
         self._tensor_1_projection = Parameter(torch.Tensor(tensor_1_dim, tensor_1_projected_dim))
         self._tensor_2_projection = Parameter(torch.Tensor(tensor_2_dim, tensor_2_projected_dim))
         self.reset_parameters()
 
     def reset_parameters(self):
-        torch.nn.init.xavier_uniform(self._tensor_1_projection)
-        torch.nn.init.xavier_uniform(self._tensor_2_projection)
+        torch.nn.init.xavier_uniform_(self._tensor_1_projection)
+        torch.nn.init.xavier_uniform_(self._tensor_2_projection)
 
     @overrides
     def forward(self, tensor_1: torch.Tensor, tensor_2: torch.Tensor) -> torch.Tensor:
@@ -92,19 +98,3 @@ class MultiHeadedSimilarity(SimilarityFunction):
         # we don't need to do anything special here.  It will just compute similarity on the
         # projection dimension for each head, returning a tensor of shape (..., num_heads).
         return self._internal_similarity(split_tensor_1, split_tensor_2)
-
-    @classmethod
-    def from_params(cls, params: Params) -> 'MultiHeadedSimilarity':
-        num_heads = params.pop("num_heads")
-        tensor_1_dim = params.pop("tensor_1_dim")
-        tensor_1_projected_dim = params.pop("tensor_1_projected_dim", None)
-        tensor_2_dim = params.pop("tensor_2_dim", None)
-        tensor_2_projected_dim = params.pop("tensor_1_projected_dim", None)
-        internal_similarity = SimilarityFunction.from_params(params.pop("internal_similarity", {}))
-        params.assert_empty(cls.__name__)
-        return cls(num_heads=num_heads,
-                   tensor_1_dim=tensor_1_dim,
-                   tensor_1_projected_dim=tensor_1_projected_dim,
-                   tensor_2_dim=tensor_2_dim,
-                   tensor_2_projected_dim=tensor_2_projected_dim,
-                   internal_similarity=internal_similarity)

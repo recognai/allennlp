@@ -1,35 +1,34 @@
-from typing import Dict
+import csv
+from typing import Dict, Optional
 import logging
 
 from overrides import overrides
 
-import tqdm
-
-from allennlp.common import Params
 from allennlp.common.checks import ConfigurationError
-from allennlp.data.dataset import Dataset
+from allennlp.common.file_utils import cached_path
+from allennlp.common.util import START_SYMBOL, END_SYMBOL
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
 from allennlp.data.fields import TextField
 from allennlp.data.instance import Instance
 from allennlp.data.tokenizers import Token, Tokenizer, WordTokenizer
 from allennlp.data.token_indexers import TokenIndexer, SingleIdTokenIndexer
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
 
-START_SYMBOL = "@@START@@"
-END_SYMBOL = "@@END@@"
 
 @DatasetReader.register("seq2seq")
 class Seq2SeqDatasetReader(DatasetReader):
     """
     Read a tsv file containing paired sequences, and create a dataset suitable for a
-    ``SimpleSeq2Seq`` model, or any model with a matching API.
+    ``ComposedSeq2Seq`` model, or any model with a matching API.
 
     Expected format for each input line: <source_sequence_string>\t<target_sequence_string>
 
     The output of ``read`` is a list of ``Instance`` s with the fields:
         source_tokens: ``TextField`` and
         target_tokens: ``TextField``
+
+    `START_SYMBOL` and `END_SYMBOL` tokens are added to the source and target sequences.
 
     Parameters
     ----------
@@ -45,67 +44,84 @@ class Seq2SeqDatasetReader(DatasetReader):
     target_token_indexers : ``Dict[str, TokenIndexer]``, optional
         Indexers used to define output (target side) token representations. Defaults to
         ``source_token_indexers``.
+    source_add_start_token : bool, (optional, default=True)
+        Whether or not to add `START_SYMBOL` to the beginning of the source sequence.
+    delimiter : str, (optional, default="\t")
+        Set delimiter for tsv/csv file.
     """
-    def __init__(self,
-                 source_tokenizer: Tokenizer = None,
-                 target_tokenizer: Tokenizer = None,
-                 source_token_indexers: Dict[str, TokenIndexer] = None,
-                 target_token_indexers: Dict[str, TokenIndexer] = None) -> None:
+
+    def __init__(
+        self,
+        source_tokenizer: Tokenizer = None,
+        target_tokenizer: Tokenizer = None,
+        source_token_indexers: Dict[str, TokenIndexer] = None,
+        target_token_indexers: Dict[str, TokenIndexer] = None,
+        source_add_start_token: bool = True,
+        delimiter: str = "\t",
+        source_max_tokens: Optional[int] = None,
+        target_max_tokens: Optional[int] = None,
+        lazy: bool = False,
+    ) -> None:
+        super().__init__(lazy)
         self._source_tokenizer = source_tokenizer or WordTokenizer()
         self._target_tokenizer = target_tokenizer or self._source_tokenizer
         self._source_token_indexers = source_token_indexers or {"tokens": SingleIdTokenIndexer()}
         self._target_token_indexers = target_token_indexers or self._source_token_indexers
+        self._source_add_start_token = source_add_start_token
+        self._delimiter = delimiter
+        self._source_max_tokens = source_max_tokens
+        self._target_max_tokens = target_max_tokens
+        self._source_max_exceeded = 0
+        self._target_max_exceeded = 0
 
     @overrides
-    def read(self, file_path):
-        instances = []
-        with open(file_path, "r") as data_file:
+    def _read(self, file_path):
+        # Reset exceeded counts
+        self._source_max_exceeded = 0
+        self._target_max_exceeded = 0
+        with open(cached_path(file_path), "r") as data_file:
             logger.info("Reading instances from lines in file at: %s", file_path)
-            for line_num, line in enumerate(tqdm.tqdm(data_file)):
-                line = line.strip("\n")
-
-                if not line:
-                    continue
-
-                line_parts = line.split('\t')
-                if len(line_parts) != 2:
-                    raise ConfigurationError("Invalid line format: %s (line number %d)" % (line, line_num + 1))
-                source_sequence, target_sequence = line_parts
-                instances.append(self.text_to_instance(source_sequence, target_sequence))
-        if not instances:
-            raise ConfigurationError("No instances read!")
-        return Dataset(instances)
+            for line_num, row in enumerate(csv.reader(data_file, delimiter=self._delimiter)):
+                if len(row) != 2:
+                    raise ConfigurationError(
+                        "Invalid line format: %s (line number %d)" % (row, line_num + 1)
+                    )
+                source_sequence, target_sequence = row
+                yield self.text_to_instance(source_sequence, target_sequence)
+        if self._source_max_tokens and self._source_max_exceeded:
+            logger.info(
+                "In %d instances, the source token length exceeded the max limit (%d) and were truncated.",
+                self._source_max_exceeded,
+                self._source_max_tokens,
+            )
+        if self._target_max_tokens and self._target_max_exceeded:
+            logger.info(
+                "In %d instances, the target token length exceeded the max limit (%d) and were truncated.",
+                self._target_max_exceeded,
+                self._target_max_tokens,
+            )
 
     @overrides
-    def text_to_instance(self, source_string: str, target_string: str = None) -> Instance:  # type: ignore
-        # pylint: disable=arguments-differ
+    def text_to_instance(
+        self, source_string: str, target_string: str = None
+    ) -> Instance:  # type: ignore
+
         tokenized_source = self._source_tokenizer.tokenize(source_string)
+        if self._source_max_tokens and len(tokenized_source) > self._source_max_tokens:
+            self._source_max_exceeded += 1
+            tokenized_source = tokenized_source[: self._source_max_tokens]
+        if self._source_add_start_token:
+            tokenized_source.insert(0, Token(START_SYMBOL))
+        tokenized_source.append(Token(END_SYMBOL))
         source_field = TextField(tokenized_source, self._source_token_indexers)
         if target_string is not None:
             tokenized_target = self._target_tokenizer.tokenize(target_string)
+            if self._target_max_tokens and len(tokenized_target) > self._target_max_tokens:
+                self._target_max_exceeded += 1
+                tokenized_target = tokenized_target[: self._target_max_tokens]
             tokenized_target.insert(0, Token(START_SYMBOL))
             tokenized_target.append(Token(END_SYMBOL))
             target_field = TextField(tokenized_target, self._target_token_indexers)
             return Instance({"source_tokens": source_field, "target_tokens": target_field})
         else:
-            return Instance({'source_tokens': source_field})
-
-    @classmethod
-    def from_params(cls, params: Params) -> 'Seq2SeqDatasetReader':
-        source_tokenizer_type = params.pop('source_tokenizer', None)
-        source_tokenizer = None if source_tokenizer_type is None else Tokenizer.from_params(source_tokenizer_type)
-        target_tokenizer_type = params.pop('target_tokenizer', None)
-        target_tokenizer = None if target_tokenizer_type is None else Tokenizer.from_params(target_tokenizer_type)
-        source_indexers_type = params.pop('source_token_indexers', None)
-        if source_indexers_type is None:
-            source_token_indexers = None
-        else:
-            source_token_indexers = TokenIndexer.dict_from_params(source_indexers_type)
-        target_indexers_type = params.pop('target_token_indexers', None)
-        if target_indexers_type is None:
-            target_token_indexers = None
-        else:
-            target_token_indexers = TokenIndexer.dict_from_params(target_indexers_type)
-        params.assert_empty(cls.__name__)
-        return Seq2SeqDatasetReader(source_tokenizer, target_tokenizer,
-                                    source_token_indexers, target_token_indexers)
+            return Instance({"source_tokens": source_field})

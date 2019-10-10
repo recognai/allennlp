@@ -1,9 +1,8 @@
-import torch
+from allennlp.modules.encoder_base import _EncoderBase
+from allennlp.common import Registrable
 
-from allennlp.common import Params, Registrable
 
-
-class Seq2SeqEncoder(torch.nn.Module, Registrable):
+class Seq2SeqEncoder(_EncoderBase, Registrable):
     """
     A ``Seq2SeqEncoder`` is a ``Module`` that takes as input a sequence of vectors and returns a
     modified sequence of vectors.  Input shape: ``(batch_size, sequence_length, input_dim)``; output
@@ -13,6 +12,7 @@ class Seq2SeqEncoder(torch.nn.Module, Registrable):
     You might need this if you want to construct a ``Linear`` layer using the output of this encoder,
     or to raise sensible errors for mis-matching input dimensions.
     """
+
     def get_input_dim(self) -> int:
         """
         Returns the dimension of the vector input for each element in the sequence input
@@ -28,7 +28,10 @@ class Seq2SeqEncoder(torch.nn.Module, Registrable):
         """
         raise NotImplementedError
 
-    @classmethod
-    def from_params(cls, params: Params) -> 'Seq2SeqEncoder':
-        choice = params.pop_choice('type', cls.list_available())
-        return cls.by_name(choice).from_params(params)
+    def is_bidirectional(self) -> bool:
+        """
+        Returns ``True`` if this encoder is bidirectional.  If so, we assume the forward direction
+        of the encoder is the first half of the final dimension, and the backward direction is the
+        second half.
+        """
+        raise NotImplementedError

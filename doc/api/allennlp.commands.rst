@@ -11,20 +11,28 @@ The included module ``allennlp.run`` is such a script:
 
 .. code-block:: bash
 
-    $ python -m allennlp.run --help
-    usage: run [command]
-
     Run AllenNLP
 
     optional arguments:
-    -h, --help  show this help message and exit
+      -h, --help  show this help message and exit
 
     Commands:
-
-        predict   Use a trained model to make predictions.
-        train     Train a model
-        serve     Run the web service and demo.
-        evaluate  Evaluate the specified model + dataset
+        train       Train a model
+        configure   Generate a stub configuration
+        evaluate    Evaluate the specified model + dataset
+        predict     Use a trained model to make predictions.
+        make-vocab  Create a vocabulary
+        elmo        Create word vectors using a pretrained ELMo model.
+        fine-tune   Continue training a model on a new dataset
+        dry-run     Create a vocabulary, compute dataset statistics and other
+                    training utilities.
+        find-lr     Find a learning rate range where loss decreases quickly
+                    for the specified model and dataset.
+        test-install
+                    Run the unit tests.
+        print-results
+                    Print results from allennlp serialization directories to the
+                    console.
 
 However, it only knows about the models and classes that are
 included with AllenNLP. Once you start creating custom models,
@@ -32,10 +40,18 @@ you'll need to make your own script which imports them and then
 calls ``main()``.
 
 .. toctree::
+    allennlp.commands.subcommand
+    allennlp.commands.configure
     allennlp.commands.evaluate
+    allennlp.commands.make_vocab
     allennlp.commands.predict
-    allennlp.commands.serve
     allennlp.commands.train
+    allennlp.commands.fine_tune
+    allennlp.commands.elmo
+    allennlp.commands.dry_run
+    allennlp.commands.find_learning_rate
+    allennlp.commands.test_install
+    allennlp.commands.print_results
 
 .. automodule:: allennlp.commands
    :members:

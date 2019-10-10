@@ -19,8 +19,9 @@ class TokenCharactersEncoder(TokenEmbedder):
 
     We take the embedding and encoding modules as input, so this class is itself quite simple.
     """
+
     def __init__(self, embedding: Embedding, encoder: Seq2VecEncoder, dropout: float = 0.0) -> None:
-        super(TokenCharactersEncoder, self).__init__()
+        super().__init__()
         self._embedding = TimeDistributed(embedding)
         self._encoder = TimeDistributed(encoder)
         if dropout > 0:
@@ -29,21 +30,29 @@ class TokenCharactersEncoder(TokenEmbedder):
             self._dropout = lambda x: x
 
     def get_output_dim(self) -> int:
-        return self._encoder._module.get_output_dim()  # pylint: disable=protected-access
+        return self._encoder._module.get_output_dim()
 
-    def forward(self, token_characters: torch.Tensor) -> torch.Tensor:  # pylint: disable=arguments-differ
+    def forward(self, token_characters: torch.Tensor) -> torch.Tensor:
         mask = (token_characters != 0).long()
         return self._dropout(self._encoder(self._embedding(token_characters), mask))
 
+    # The setdefault requires a custom from_params
     @classmethod
-    def from_params(cls, vocab: Vocabulary, params: Params) -> 'TokenCharactersEncoder':
+    def from_params(  # type: ignore
+        cls, vocab: Vocabulary, params: Params
+    ) -> "TokenCharactersEncoder":
+
         embedding_params: Params = params.pop("embedding")
         # Embedding.from_params() uses "tokens" as the default namespace, but we need to change
-        # that to be "token_characters" by default.
-        embedding_params.setdefault("vocab_namespace", "token_characters")
+        # that to be "token_characters" by default. If num_embeddings is present, set default namespace
+        # to None so that extend_vocab call doesn't misinterpret that some namespace was originally used.
+        default_namespace = (
+            None if embedding_params.get("num_embeddings", None) else "token_characters"
+        )
+        embedding_params.setdefault("vocab_namespace", default_namespace)
         embedding = Embedding.from_params(vocab, embedding_params)
         encoder_params: Params = params.pop("encoder")
         encoder = Seq2VecEncoder.from_params(encoder_params)
-        dropout = params.pop("dropout", 0.0)
+        dropout = params.pop_float("dropout", 0.0)
         params.assert_empty(cls.__name__)
         return cls(embedding, encoder, dropout)

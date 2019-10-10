@@ -1,7 +1,7 @@
 import torch
 
-from allennlp.common import Params, Registrable
-from allennlp.data import Vocabulary
+from allennlp.common import Registrable
+
 
 class TokenEmbedder(torch.nn.Module, Registrable):
     """
@@ -17,6 +17,7 @@ class TokenEmbedder(torch.nn.Module, Registrable):
     which we might need when defining model parameters such as LSTMs or linear layers, which need
     to know their input dimension before the layers are called.
     """
+
     default_implementation = "embedding"
 
     def get_output_dim(self) -> int:
@@ -25,8 +26,3 @@ class TokenEmbedder(torch.nn.Module, Registrable):
         token.  This is `not` the shape of the returned tensor, but the last element of that shape.
         """
         raise NotImplementedError
-
-    @classmethod
-    def from_params(cls, vocab: Vocabulary, params: Params) -> 'TokenEmbedder':
-        choice = params.pop_choice('type', cls.list_available())
-        return cls.by_name(choice).from_params(vocab, params)

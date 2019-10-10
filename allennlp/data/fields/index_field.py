@@ -1,15 +1,14 @@
-# pylint: disable=no-self-use
 from typing import Dict
 
 from overrides import overrides
-import numpy
+import torch
 
 from allennlp.data.fields.field import Field
 from allennlp.data.fields.sequence_field import SequenceField
 from allennlp.common.checks import ConfigurationError
 
 
-class IndexField(Field[numpy.ndarray]):
+class IndexField(Field[torch.Tensor]):
     """
     An ``IndexField`` is an index into a
     :class:`~allennlp.data.fields.sequence_field.SequenceField`, as might be used for representing
@@ -27,22 +26,37 @@ class IndexField(Field[numpy.ndarray]):
     sequence_field : ``SequenceField``
         A field containing the sequence that this ``IndexField`` is a pointer into.
     """
+
     def __init__(self, index: int, sequence_field: SequenceField) -> None:
         self.sequence_index = index
         self.sequence_field = sequence_field
 
         if not isinstance(index, int):
-            raise ConfigurationError("IndexFields must be passed integer indices. "
-                                     "Found index: {} with type: {}.".format(index, type(index)))
+            raise ConfigurationError(
+                "IndexFields must be passed integer indices. "
+                "Found index: {} with type: {}.".format(index, type(index))
+            )
 
     @overrides
     def get_padding_lengths(self) -> Dict[str, int]:
-        return {'num_options': self.sequence_field.sequence_length()}
+
+        return {}
 
     @overrides
-    def as_array(self, padding_lengths: Dict[str, int]) -> numpy.array:  # pylint: disable=unused-argument
-        return numpy.asarray([self.sequence_index])
+    def as_tensor(self, padding_lengths: Dict[str, int]) -> torch.Tensor:
+
+        tensor = torch.LongTensor([self.sequence_index])
+        return tensor
 
     @overrides
     def empty_field(self):
-        return IndexField(-1, None)
+        return IndexField(-1, self.sequence_field.empty_field())
+
+    def __str__(self) -> str:
+        return f"IndexField with index: {self.sequence_index}."
+
+    def __eq__(self, other) -> bool:
+        # Allow equality checks to ints that are the sequence index
+        if isinstance(other, int):
+            return self.sequence_index == other
+        return super().__eq__(other)

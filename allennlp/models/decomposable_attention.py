@@ -1,15 +1,15 @@
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Any
 
 import torch
 
-from allennlp.common import Params
-from allennlp.common.checks import ConfigurationError
+from allennlp.common.checks import check_dimensions_match
 from allennlp.data import Vocabulary
 from allennlp.models.model import Model
-from allennlp.modules import FeedForward, MatrixAttention
+from allennlp.modules import FeedForward
 from allennlp.modules import Seq2SeqEncoder, SimilarityFunction, TimeDistributed, TextFieldEmbedder
+from allennlp.modules.matrix_attention.legacy_matrix_attention import LegacyMatrixAttention
 from allennlp.nn import InitializerApplicator, RegularizerApplicator
-from allennlp.nn.util import get_text_field_mask, last_dim_softmax, weighted_sum
+from allennlp.nn.util import get_text_field_mask, masked_softmax, weighted_sum
 from allennlp.training.metrics import CategoricalAccuracy
 
 
@@ -60,21 +60,25 @@ class DecomposableAttention(Model):
     regularizer : ``RegularizerApplicator``, optional (default=``None``)
         If provided, will be used to calculate the regularization penalty during training.
     """
-    def __init__(self, vocab: Vocabulary,
-                 text_field_embedder: TextFieldEmbedder,
-                 attend_feedforward: FeedForward,
-                 similarity_function: SimilarityFunction,
-                 compare_feedforward: FeedForward,
-                 aggregate_feedforward: FeedForward,
-                 premise_encoder: Optional[Seq2SeqEncoder] = None,
-                 hypothesis_encoder: Optional[Seq2SeqEncoder] = None,
-                 initializer: InitializerApplicator = InitializerApplicator(),
-                 regularizer: Optional[RegularizerApplicator] = None) -> None:
-        super(DecomposableAttention, self).__init__(vocab, regularizer)
+
+    def __init__(
+        self,
+        vocab: Vocabulary,
+        text_field_embedder: TextFieldEmbedder,
+        attend_feedforward: FeedForward,
+        similarity_function: SimilarityFunction,
+        compare_feedforward: FeedForward,
+        aggregate_feedforward: FeedForward,
+        premise_encoder: Optional[Seq2SeqEncoder] = None,
+        hypothesis_encoder: Optional[Seq2SeqEncoder] = None,
+        initializer: InitializerApplicator = InitializerApplicator(),
+        regularizer: Optional[RegularizerApplicator] = None,
+    ) -> None:
+        super().__init__(vocab, regularizer)
 
         self._text_field_embedder = text_field_embedder
         self._attend_feedforward = TimeDistributed(attend_feedforward)
-        self._matrix_attention = MatrixAttention(similarity_function)
+        self._matrix_attention = LegacyMatrixAttention(similarity_function)
         self._compare_feedforward = TimeDistributed(compare_feedforward)
         self._aggregate_feedforward = aggregate_feedforward
         self._premise_encoder = premise_encoder
@@ -82,25 +86,32 @@ class DecomposableAttention(Model):
 
         self._num_labels = vocab.get_vocab_size(namespace="labels")
 
-        if text_field_embedder.get_output_dim() != attend_feedforward.get_input_dim():
-            raise ConfigurationError("Output dimension of the text_field_embedder (dim: {}), "
-                                     "must match the input_dim of the FeedForward layer "
-                                     "attend_feedforward, (dim: {}). ".format(text_field_embedder.get_output_dim(),
-                                                                              attend_feedforward.get_input_dim()))
-        if aggregate_feedforward.get_output_dim() != self._num_labels:
-            raise ConfigurationError("Final output dimension (%d) must equal num labels (%d)" %
-                                     (aggregate_feedforward.get_output_dim(), self._num_labels))
+        check_dimensions_match(
+            text_field_embedder.get_output_dim(),
+            attend_feedforward.get_input_dim(),
+            "text field embedding dim",
+            "attend feedforward input dim",
+        )
+        check_dimensions_match(
+            aggregate_feedforward.get_output_dim(),
+            self._num_labels,
+            "final output dimension",
+            "number of labels",
+        )
 
         self._accuracy = CategoricalAccuracy()
         self._loss = torch.nn.CrossEntropyLoss()
 
         initializer(self)
 
-    def forward(self,  # type: ignore
-                premise: Dict[str, torch.LongTensor],
-                hypothesis: Dict[str, torch.LongTensor],
-                label: torch.IntTensor = None) -> Dict[str, torch.Tensor]:
-        # pylint: disable=arguments-differ
+    def forward(  # type: ignore
+        self,
+        premise: Dict[str, torch.LongTensor],
+        hypothesis: Dict[str, torch.LongTensor],
+        label: torch.IntTensor = None,
+        metadata: List[Dict[str, Any]] = None,
+    ) -> Dict[str, torch.Tensor]:
+
         """
         Parameters
         ----------
@@ -108,9 +119,11 @@ class DecomposableAttention(Model):
             From a ``TextField``
         hypothesis : Dict[str, torch.LongTensor]
             From a ``TextField``
-        label : torch.IntTensor, optional (default = None)
+        label : torch.IntTensor, optional, (default = None)
             From a ``LabelField``
-
+        metadata : ``List[Dict[str, Any]]``, optional, (default = None)
+            Metadata containing the original tokenization of the premise and
+            hypothesis with 'premise_tokens' and 'hypothesis_tokens' keys respectively.
         Returns
         -------
         An output dictionary consisting of:
@@ -140,12 +153,12 @@ class DecomposableAttention(Model):
         similarity_matrix = self._matrix_attention(projected_premise, projected_hypothesis)
 
         # Shape: (batch_size, premise_length, hypothesis_length)
-        p2h_attention = last_dim_softmax(similarity_matrix, hypothesis_mask)
+        p2h_attention = masked_softmax(similarity_matrix, hypothesis_mask)
         # Shape: (batch_size, premise_length, embedding_dim)
         attended_hypothesis = weighted_sum(embedded_hypothesis, p2h_attention)
 
         # Shape: (batch_size, hypothesis_length, premise_length)
-        h2p_attention = last_dim_softmax(similarity_matrix.transpose(1, 2).contiguous(), premise_mask)
+        h2p_attention = masked_softmax(similarity_matrix.transpose(1, 2).contiguous(), premise_mask)
         # Shape: (batch_size, hypothesis_length, embedding_dim)
         attended_premise = weighted_sum(embedded_premise, h2p_attention)
 
@@ -164,53 +177,25 @@ class DecomposableAttention(Model):
 
         aggregate_input = torch.cat([compared_premise, compared_hypothesis], dim=-1)
         label_logits = self._aggregate_feedforward(aggregate_input)
-        label_probs = torch.nn.functional.softmax(label_logits)
+        label_probs = torch.nn.functional.softmax(label_logits, dim=-1)
 
-        output_dict = {"label_logits": label_logits, "label_probs": label_probs}
+        output_dict = {
+            "label_logits": label_logits,
+            "label_probs": label_probs,
+            "h2p_attention": h2p_attention,
+            "p2h_attention": p2h_attention,
+        }
 
         if label is not None:
             loss = self._loss(label_logits, label.long().view(-1))
-            self._accuracy(label_logits, label.squeeze(-1))
+            self._accuracy(label_logits, label)
             output_dict["loss"] = loss
+
+        if metadata is not None:
+            output_dict["premise_tokens"] = [x["premise_tokens"] for x in metadata]
+            output_dict["hypothesis_tokens"] = [x["hypothesis_tokens"] for x in metadata]
 
         return output_dict
 
     def get_metrics(self, reset: bool = False) -> Dict[str, float]:
-        return {
-                'accuracy': self._accuracy.get_metric(reset),
-                }
-
-    @classmethod
-    def from_params(cls, vocab: Vocabulary, params: Params) -> 'DecomposableAttention':
-        embedder_params = params.pop("text_field_embedder")
-        text_field_embedder = TextFieldEmbedder.from_params(vocab, embedder_params)
-
-        premise_encoder_params = params.pop("premise_encoder", None)
-        if premise_encoder_params is not None:
-            premise_encoder = Seq2SeqEncoder.from_params(premise_encoder_params)
-        else:
-            premise_encoder = None
-
-        hypothesis_encoder_params = params.pop("hypothesis_encoder", None)
-        if hypothesis_encoder_params is not None:
-            hypothesis_encoder = Seq2SeqEncoder.from_params(hypothesis_encoder_params)
-        else:
-            hypothesis_encoder = None
-
-        attend_feedforward = FeedForward.from_params(params.pop('attend_feedforward'))
-        similarity_function = SimilarityFunction.from_params(params.pop("similarity_function"))
-        compare_feedforward = FeedForward.from_params(params.pop('compare_feedforward'))
-        aggregate_feedforward = FeedForward.from_params(params.pop('aggregate_feedforward'))
-        initializer = InitializerApplicator.from_params(params.pop('initializer', []))
-        regularizer = RegularizerApplicator.from_params(params.pop('regularizer', []))
-
-        return cls(vocab=vocab,
-                   text_field_embedder=text_field_embedder,
-                   attend_feedforward=attend_feedforward,
-                   similarity_function=similarity_function,
-                   compare_feedforward=compare_feedforward,
-                   aggregate_feedforward=aggregate_feedforward,
-                   premise_encoder=premise_encoder,
-                   hypothesis_encoder=hypothesis_encoder,
-                   initializer=initializer,
-                   regularizer=regularizer)
+        return {"accuracy": self._accuracy.get_metric(reset)}

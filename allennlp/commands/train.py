@@ -5,177 +5,324 @@ which to write the results.
 
 .. code-block:: bash
 
-   $ python -m allennlp.run train --help
-   usage: run [command] train [-h] -s SERIALIZATION_DIR param_path
+   $ allennlp train --help
+    usage: allennlp train [-h] -s SERIALIZATION_DIR [-r] [-f] [-o OVERRIDES]
+                          [--file-friendly-logging]
+                          [--cache-directory CACHE_DIRECTORY]
+                          [--cache-prefix CACHE_PREFIX]
+                          [--include-package INCLUDE_PACKAGE]
+                          param_path
 
-   Train the specified model on the specified dataset.
+    Train the specified model on the specified dataset.
 
-   positional arguments:
-   param_path            path to parameter file describing the model to be trained
+    positional arguments:
+      param_path            path to parameter file describing the model to be
+                            trained
 
-   optional arguments:
-    -h, --help            show this help message and exit
-    -s SERIALIZATION_DIR, --serialization_dir SERIALIZATION_DIR
+    optional arguments:
+      -h, --help            show this help message and exit
+      -s SERIALIZATION_DIR, --serialization-dir SERIALIZATION_DIR
                             directory in which to save the model and its logs
+      -r, --recover         recover training from the state in serialization_dir
+      -f, --force           overwrite the output directory if it exists
+      -o OVERRIDES, --overrides OVERRIDES
+                            a JSON structure used to override the experiment
+                            configuration
+      --file-friendly-logging
+                            outputs tqdm status on separate lines and slows tqdm
+                            refresh rate
+      --cache-directory CACHE_DIRECTORY
+                            Location to store cache of data preprocessing
+      --cache-prefix CACHE_PREFIX
+                            Prefix to use for data caching, giving current
+                            parameter settings a name in the cache, instead of
+                            computing a hash
+      --include-package INCLUDE_PACKAGE
+                            additional packages to include
 """
-from typing import List
+
 import argparse
-import json
 import logging
 import os
-import sys
-from copy import deepcopy
 
-from allennlp.commands.evaluate import evaluate
-from allennlp.common.checks import ensure_pythonhashseed_set
-from allennlp.common.params import Params
-from allennlp.common.tee_logger import TeeLogger
-from allennlp.common.util import prepare_environment
-from allennlp.data import Dataset, Vocabulary
-from allennlp.data.dataset_readers.dataset_reader import DatasetReader
-from allennlp.data.iterators.data_iterator import DataIterator
-from allennlp.models.archival import archive_model
-from allennlp.models.model import Model
+from allennlp.commands.subcommand import Subcommand
+from allennlp.common.checks import check_for_gpu
+from allennlp.common import Params
+from allennlp.common.util import (
+    prepare_environment,
+    prepare_global_logging,
+    cleanup_global_logging,
+    dump_metrics,
+)
+from allennlp.models.archival import archive_model, CONFIG_NAME
+from allennlp.models.model import Model, _DEFAULT_WEIGHTS
 from allennlp.training.trainer import Trainer
+from allennlp.training.trainer_base import TrainerBase
+from allennlp.training.trainer_pieces import TrainerPieces
+from allennlp.training.util import create_serialization_dir, evaluate
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
-
-def add_subparser(parser: argparse._SubParsersAction) -> argparse.ArgumentParser:  # pylint: disable=protected-access
-    description = '''Train the specified model on the specified dataset.'''
-    subparser = parser.add_parser(
-            'train', description=description, help='Train a model')
-    subparser.add_argument('param_path',
-                           type=str,
-                           help='path to parameter file describing the model to be trained')
-    subparser.add_argument('-s', '--serialization_dir',
-                           type=str,
-                           required=True,
-                           help='directory in which to save the model and its logs')
-    subparser.set_defaults(func=_train_model_from_args)
-
-    return subparser
+logger = logging.getLogger(__name__)
 
 
-def _train_model_from_args(args: argparse.Namespace):
+class Train(Subcommand):
+    def add_subparser(
+        self, name: str, parser: argparse._SubParsersAction
+    ) -> argparse.ArgumentParser:
+
+        description = """Train the specified model on the specified dataset."""
+        subparser = parser.add_parser(name, description=description, help="Train a model.")
+
+        subparser.add_argument(
+            "param_path", type=str, help="path to parameter file describing the model to be trained"
+        )
+
+        subparser.add_argument(
+            "-s",
+            "--serialization-dir",
+            required=True,
+            type=str,
+            help="directory in which to save the model and its logs",
+        )
+
+        subparser.add_argument(
+            "-r",
+            "--recover",
+            action="store_true",
+            default=False,
+            help="recover training from the state in serialization_dir",
+        )
+
+        subparser.add_argument(
+            "-f",
+            "--force",
+            action="store_true",
+            required=False,
+            help="overwrite the output directory if it exists",
+        )
+
+        subparser.add_argument(
+            "-o",
+            "--overrides",
+            type=str,
+            default="",
+            help="a JSON structure used to override the experiment configuration",
+        )
+
+        subparser.add_argument(
+            "--file-friendly-logging",
+            action="store_true",
+            default=False,
+            help="outputs tqdm status on separate lines and slows tqdm refresh rate",
+        )
+
+        subparser.add_argument(
+            "--cache-directory",
+            type=str,
+            default="",
+            help="Location to store cache of data preprocessing",
+        )
+
+        subparser.add_argument(
+            "--cache-prefix",
+            type=str,
+            default="",
+            help="Prefix to use for data caching, giving current parameter "
+            "settings a name in the cache, instead of computing a hash",
+        )
+
+        subparser.set_defaults(func=train_model_from_args)
+
+        return subparser
+
+
+def train_model_from_args(args: argparse.Namespace):
     """
     Just converts from an ``argparse.Namespace`` object to string paths.
     """
-    train_model_from_file(args.param_path, args.serialization_dir)
+    train_model_from_file(
+        args.param_path,
+        args.serialization_dir,
+        args.overrides,
+        args.file_friendly_logging,
+        args.recover,
+        args.force,
+        args.cache_directory,
+        args.cache_prefix,
+    )
 
 
-def train_model_from_file(parameter_filename: str, serialization_dir: str) -> Model:
+def train_model_from_file(
+    parameter_filename: str,
+    serialization_dir: str,
+    overrides: str = "",
+    file_friendly_logging: bool = False,
+    recover: bool = False,
+    force: bool = False,
+    cache_directory: str = None,
+    cache_prefix: str = None,
+) -> Model:
     """
     A wrapper around :func:`train_model` which loads the params from a file.
 
     Parameters
     ----------
-    param_path: str, required.
+    parameter_filename : ``str``
         A json parameter file specifying an AllenNLP experiment.
-    serialization_dir: str, required
-        The directory in which to save results and logs.
+    serialization_dir : ``str``
+        The directory in which to save results and logs. We just pass this along to
+        :func:`train_model`.
+    overrides : ``str``
+        A JSON string that we will use to override values in the input parameter file.
+    file_friendly_logging : ``bool``, optional (default=False)
+        If ``True``, we make our output more friendly to saved model files.  We just pass this
+        along to :func:`train_model`.
+    recover : ``bool`, optional (default=False)
+        If ``True``, we will try to recover a training run from an existing serialization
+        directory.  This is only intended for use when something actually crashed during the middle
+        of a run.  For continuing training a model on new data, see the ``fine-tune`` command.
+    force : ``bool``, optional (default=False)
+        If ``True``, we will overwrite the serialization directory if it already exists.
+    cache_directory : ``str``, optional
+        For caching data pre-processing.  See :func:`allennlp.training.util.datasets_from_params`.
+    cache_prefix : ``str``, optional
+        For caching data pre-processing.  See :func:`allennlp.training.util.datasets_from_params`.
     """
-
-    # We need the python hashseed to be set if we're training a model
-    ensure_pythonhashseed_set()
-
     # Load the experiment config from a file and pass it to ``train_model``.
-    params = Params.from_file(parameter_filename)
-    return train_model(params, serialization_dir)
+    params = Params.from_file(parameter_filename, overrides)
+    return train_model(
+        params,
+        serialization_dir,
+        file_friendly_logging,
+        recover,
+        force,
+        cache_directory,
+        cache_prefix,
+    )
 
 
-def train_model(params: Params, serialization_dir: str) -> Model:
+def train_model(
+    params: Params,
+    serialization_dir: str,
+    file_friendly_logging: bool = False,
+    recover: bool = False,
+    force: bool = False,
+    cache_directory: str = None,
+    cache_prefix: str = None,
+) -> Model:
     """
-    This function can be used as an entry point to running models in AllenNLP
-    directly from a JSON specification using a :class:`Driver`. Note that if
-    you care about reproducibility, you should avoid running code using Pytorch
-    or numpy which affect the reproducibility of your experiment before you
-    import and use this function, these libraries rely on random seeds which
-    can be set in this function via a JSON specification file. Note that this
-    function performs training and will also evaluate the trained model on
-    development and test sets if provided in the parameter json.
+    Trains the model specified in the given :class:`Params` object, using the data and training
+    parameters also specified in that object, and saves the results in ``serialization_dir``.
 
     Parameters
     ----------
-    params: Params, required.
+    params : ``Params``
         A parameter object specifying an AllenNLP Experiment.
-    serialization_dir: str, required
+    serialization_dir : ``str``
         The directory in which to save results and logs.
+    file_friendly_logging : ``bool``, optional (default=False)
+        If ``True``, we add newlines to tqdm output, even on an interactive terminal, and we slow
+        down tqdm's output to only once every 10 seconds.
+    recover : ``bool``, optional (default=False)
+        If ``True``, we will try to recover a training run from an existing serialization
+        directory.  This is only intended for use when something actually crashed during the middle
+        of a run.  For continuing training a model on new data, see the ``fine-tune`` command.
+    force : ``bool``, optional (default=False)
+        If ``True``, we will overwrite the serialization directory if it already exists.
+    cache_directory : ``str``, optional
+        For caching data pre-processing.  See :func:`allennlp.training.util.datasets_from_params`.
+    cache_prefix : ``str``, optional
+        For caching data pre-processing.  See :func:`allennlp.training.util.datasets_from_params`.
+
+    Returns
+    -------
+    best_model: ``Model``
+        The model with the best epoch weights.
     """
+    create_serialization_dir(params, serialization_dir, recover, force)
+    stdout_handler = prepare_global_logging(serialization_dir, file_friendly_logging)
     prepare_environment(params)
 
-    os.makedirs(serialization_dir, exist_ok=True)
-    sys.stdout = TeeLogger(os.path.join(serialization_dir, "stdout.log"), sys.stdout)  # type: ignore
-    sys.stderr = TeeLogger(os.path.join(serialization_dir, "stderr.log"), sys.stderr)  # type: ignore
-    handler = logging.FileHandler(os.path.join(serialization_dir, "python_logging.log"))
-    handler.setLevel(logging.INFO)
-    handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s'))
-    logging.getLogger().addHandler(handler)
-    serialization_params = deepcopy(params).as_dict(quiet=True)
-    with open(os.path.join(serialization_dir, "model_params.json"), "w") as param_file:
-        json.dump(serialization_params, param_file, indent=4)
+    cuda_device = params.params.get("trainer").get("cuda_device", -1)
+    check_for_gpu(cuda_device)
 
-    # Now we begin assembling the required parts for the Trainer.
-    dataset_reader = DatasetReader.from_params(params.pop('dataset_reader'))
+    params.to_file(os.path.join(serialization_dir, CONFIG_NAME))
 
-    train_data_path = params.pop('train_data_path')
-    logger.info("Reading training data from %s", train_data_path)
-    train_data = dataset_reader.read(train_data_path)
+    evaluate_on_test = params.pop_bool("evaluate_on_test", False)
 
-    all_datasets: List[Dataset] = [train_data]
-    datasets_in_vocab = ["train"]
+    trainer_type = params.get("trainer", {}).get("type", "default")
 
-    validation_data_path = params.pop('validation_data_path', None)
-    if validation_data_path is not None:
-        logger.info("Reading validation data from %s", validation_data_path)
-        validation_data = dataset_reader.read(validation_data_path)
-        all_datasets.append(validation_data)
-        datasets_in_vocab.append("validation")
+    if trainer_type == "default":
+        # Special logic to instantiate backward-compatible trainer.
+        pieces = TrainerPieces.from_params(
+            params, serialization_dir, recover, cache_directory, cache_prefix
+        )
+        trainer = Trainer.from_params(
+            model=pieces.model,
+            serialization_dir=serialization_dir,
+            iterator=pieces.iterator,
+            train_data=pieces.train_dataset,
+            validation_data=pieces.validation_dataset,
+            params=pieces.params,
+            validation_iterator=pieces.validation_iterator,
+        )
+
+        evaluation_iterator = pieces.validation_iterator or pieces.iterator
+        evaluation_dataset = pieces.test_dataset
+
     else:
-        validation_data = None
+        if evaluate_on_test:
+            raise ValueError(
+                "--evaluate-on-test only works with the default Trainer. "
+                "If you're using the CallbackTrainer you can use a callback "
+                "to evaluate at Events.TRAINING_END; otherwise you'll have "
+                "to run allennlp evaluate separately."
+            )
 
-    test_data_path = params.pop("test_data_path", None)
-    if test_data_path is not None:
-        logger.info("Reading test data from %s", test_data_path)
-        test_data = dataset_reader.read(test_data_path)
-        all_datasets.append(test_data)
-        datasets_in_vocab.append("test")
-    else:
-        test_data = None
+        trainer = TrainerBase.from_params(
+            params, serialization_dir, recover, cache_directory, cache_prefix
+        )
+        evaluation_dataset = None
 
-    logger.info("Creating a vocabulary using %s data.", ", ".join(datasets_in_vocab))
-    vocab = Vocabulary.from_params(params.pop("vocabulary", {}),
-                                   Dataset([instance for dataset in all_datasets
-                                            for instance in dataset.instances]))
-    vocab.save_to_files(os.path.join(serialization_dir, "vocabulary"))
+    params.assert_empty("base train command")
 
-    model = Model.from_params(vocab, params.pop('model'))
-    iterator = DataIterator.from_params(params.pop("iterator"))
+    try:
+        metrics = trainer.train()
+    except KeyboardInterrupt:
+        # if we have completed an epoch, try to create a model archive.
+        if os.path.exists(os.path.join(serialization_dir, _DEFAULT_WEIGHTS)):
+            logging.info(
+                "Training interrupted by the user. Attempting to create "
+                "a model archive using the current best epoch weights."
+            )
+            archive_model(serialization_dir, files_to_archive=params.files_to_archive)
+        raise
 
-    train_data.index_instances(vocab)
-    if validation_data:
-        validation_data.index_instances(vocab)
+    # Evaluate
+    if evaluation_dataset and evaluate_on_test:
+        logger.info("The model will be evaluated using the best epoch weights.")
+        test_metrics = evaluate(
+            trainer.model,
+            evaluation_dataset,
+            evaluation_iterator,
+            cuda_device=trainer._cuda_devices[0],
+            # TODO(brendanr): Pass in an arg following Joel's trainer refactor.
+            batch_weight_key="",
+        )
 
-    trainer_params = params.pop("trainer")
-    trainer = Trainer.from_params(model,
-                                  serialization_dir,
-                                  iterator,
-                                  train_data,
-                                  validation_data,
-                                  trainer_params)
+        for key, value in test_metrics.items():
+            metrics["test_" + key] = value
 
-    evaluate_on_test = params.pop("evaluate_on_test", False)
-    params.assert_empty('base train command')
-    trainer.train()
+    elif evaluation_dataset:
+        logger.info(
+            "To evaluate on the test set after training, pass the "
+            "'evaluate_on_test' flag, or use the 'allennlp evaluate' command."
+        )
+
+    cleanup_global_logging(stdout_handler)
 
     # Now tar up results
-    archive_model(serialization_dir)
+    archive_model(serialization_dir, files_to_archive=params.files_to_archive)
+    dump_metrics(os.path.join(serialization_dir, "metrics.json"), metrics, log=True)
 
-    if test_data and evaluate_on_test:
-        test_data.index_instances(vocab)
-        evaluate(model, test_data, iterator, cuda_device=trainer._cuda_device)  # pylint: disable=protected-access
-
-    elif test_data:
-        logger.info("To evaluate on the test set after training, pass the "
-                    "'evaluate_on_test' flag, or use the 'allennlp evaluate' command.")
-
-    return model
+    # We count on the trainer to have the model with best weights
+    return trainer.model

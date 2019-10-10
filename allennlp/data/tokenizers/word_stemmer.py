@@ -1,7 +1,7 @@
 from nltk.stem import PorterStemmer as NltkPorterStemmer
 from overrides import overrides
 
-from allennlp.common import Params, Registrable
+from allennlp.common import Registrable
 from allennlp.data.tokenizers.token import Token
 
 
@@ -15,7 +15,8 @@ class WordStemmer(Registrable):
     inflected language, or in a low-data setting, you might need it anyway.  The default
     ``WordStemmer`` does nothing, just returning the work token as-is.
     """
-    default_implementation = 'pass_through'
+
+    default_implementation = "pass_through"
 
     def stem_word(self, word: Token) -> Token:
         """
@@ -23,32 +24,37 @@ class WordStemmer(Registrable):
         """
         raise NotImplementedError
 
-    @classmethod
-    def from_params(cls, params: Params) -> 'WordStemmer':
-        choice = params.pop_choice('type', cls.list_available(), default_to_first_choice=True)
-        params.assert_empty('WordStemmer')
-        return cls.by_name(choice)()
 
-
-@WordStemmer.register('pass_through')
+@WordStemmer.register("pass_through")
 class PassThroughWordStemmer(WordStemmer):
     """
     Does not stem words; it's a no-op.  This is the default word stemmer.
     """
+
     @overrides
     def stem_word(self, word: Token) -> Token:
         return word
 
 
-@WordStemmer.register('porter')
+@WordStemmer.register("porter")
 class PorterStemmer(WordStemmer):
     """
     Uses NLTK's PorterStemmer to stem words.
     """
+
     def __init__(self):
         self.stemmer = NltkPorterStemmer()
 
     @overrides
     def stem_word(self, word: Token) -> Token:
         new_text = self.stemmer.stem(word.text)
-        return Token(new_text, word.idx, word.pos_, word.tag_, word.dep_, getattr(word, 'text_id', None))
+        return Token(
+            text=new_text,
+            idx=word.idx,
+            lemma_=word.lemma_,
+            pos_=word.pos_,
+            tag_=word.tag_,
+            dep_=word.dep_,
+            ent_type_=word.ent_type_,
+            text_id=getattr(word, "text_id", None),
+        )

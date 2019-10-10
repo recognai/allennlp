@@ -2,8 +2,8 @@ from typing import Dict
 
 import torch
 
-from allennlp.common import Params, Registrable
-from allennlp.data import Vocabulary
+from allennlp.common import Registrable
+
 
 class TextFieldEmbedder(torch.nn.Module, Registrable):
     """
@@ -22,10 +22,25 @@ class TextFieldEmbedder(torch.nn.Module, Registrable):
     this if you want to construct a ``Linear`` layer using the output of this embedder, for
     instance.
     """
-    default_implementation = 'basic'
 
-    def forward(self,  # pylint: disable=arguments-differ
-                text_field_input: Dict[str, torch.Tensor]) -> torch.Tensor:
+    default_implementation = "basic"
+
+    def forward(
+        self, text_field_input: Dict[str, torch.Tensor], num_wrapping_dims: int = 0, **kwargs
+    ) -> torch.Tensor:
+        """
+        Parameters
+        ----------
+        text_field_input : ``Dict[str, torch.Tensor]``
+            A dictionary that was the output of a call to ``TextField.as_tensor``.  Each tensor in
+            here is assumed to have a shape roughly similar to ``(batch_size, sequence_length)``
+            (perhaps with an extra trailing dimension for the characters in each token).
+        num_wrapping_dims : ``int``, optional (default=0)
+            If you have a ``ListField[TextField]`` that created the ``text_field_input``, you'll
+            end up with tensors of shape ``(batch_size, wrapping_dim1, wrapping_dim2, ...,
+            sequence_length)``.  This parameter tells us how many wrapping dimensions there are, so
+            that we can correctly ``TimeDistribute`` the embedding of each named representation.
+        """
         raise NotImplementedError
 
     def get_output_dim(self) -> int:
@@ -35,8 +50,3 @@ class TextFieldEmbedder(torch.nn.Module, Registrable):
         that shape.
         """
         raise NotImplementedError
-
-    @classmethod
-    def from_params(cls, vocab: Vocabulary, params: Params) -> 'TextFieldEmbedder':
-        choice = params.pop_choice('type', cls.list_available(), default_to_first_choice=True)
-        return cls.by_name(choice).from_params(vocab, params)

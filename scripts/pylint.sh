@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 # Run our linter over the python code.
+echo "you should switch to flake8.py"
 
-set -e
-echo 'Starting pylint checks'
-pylint -d locally-disabled,locally-enabled -f colorized allennlp tests
-echo -e "pylint checks passed\n"
+./scripts/verify.py --checks flake8

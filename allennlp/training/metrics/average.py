@@ -11,6 +11,7 @@ class Average(Metric):
     the metric for you, for instance, you can use this to report the average result using our
     ``Metric`` API.
     """
+
     def __init__(self) -> None:
         self._total_value = 0.0
         self._count = 0
@@ -23,7 +24,7 @@ class Average(Metric):
         value : ``float``
             The value to average.
         """
-        self._total_value += value
+        self._total_value += list(self.unwrap_to_tensors(value))[0]
         self._count += 1
 
     @overrides

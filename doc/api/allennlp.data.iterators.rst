@@ -7,18 +7,15 @@ allennlp.data.iterators
    :show-inheritance:
 
 * :ref:`DataIterator<data-iterator>`
-* :ref:`AdaptiveIterator<adaptive-iterator>`
 * :ref:`BasicIterator<basic-iterator>`
 * :ref:`BucketIterator<bucket-iterator>`
+* :ref:`MultiprocessIterator<multiprocess-iterator>`
+* :ref:`HomogeneousBatchIterator<homogeneous-batch-iterator>`
+* :ref:`SameLanguageIterator<same-language-iterator>`
+* :ref:`PassThroughIterator<pass-through-iterator>`
 
 .. _data-iterator:
 .. automodule:: allennlp.data.iterators.data_iterator
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. _adaptive-iterator:
-.. automodule:: allennlp.data.iterators.adaptive_iterator
    :members:
    :undoc-members:
    :show-inheritance:
@@ -35,4 +32,26 @@ allennlp.data.iterators
    :undoc-members:
    :show-inheritance:
 
+.. _multiprocess-iterator:
+.. automodule:: allennlp.data.iterators.multiprocess_iterator
+   :members:
+   :undoc-members:
+   :show-inheritance:
 
+.. _homogeneous-batch-iterator:
+.. automodule:: allennlp.data.iterators.homogeneous_batch_iterator
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. _same-language-iterator:
+.. automodule:: allennlp.data.iterators.same_language_iterator
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. _pass-through-iterator:
+.. automodule:: allennlp.data.iterators.pass_through_iterator
+   :members:
+   :undoc-members:
+   :show-inheritance:

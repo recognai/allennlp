@@ -1,13 +1,20 @@
-FROM python:3.6.3-jessie
+FROM python:3.6.8-stretch
 
 ENV LC_ALL=C.UTF-8
 ENV LANG=C.UTF-8
+
 ENV PATH /usr/local/nvidia/bin/:$PATH
-ENV PYTHONHASHSEED 2157
+ENV LD_LIBRARY_PATH /usr/local/nvidia/lib:/usr/local/nvidia/lib64
 
-ENV LD_LIBRARY_PATH /usr/local/nvidia/lib64
+# Tell nvidia-docker the driver spec that we need as well as to
+# use all available devices, which are mounted at /usr/local/nvidia.
+# The LABEL supports an older version of nvidia-docker, the env
+# variables a newer one.
+ENV NVIDIA_VISIBLE_DEVICES all
+ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
+LABEL com.nvidia.volumes.needed="nvidia_driver"
 
-WORKDIR /stage
+WORKDIR /stage/allennlp
 
 # Install base packages.
 RUN apt-get update --fix-missing && apt-get install -y \
@@ -26,34 +33,39 @@ RUN apt-get update --fix-missing && apt-get install -y \
     build-essential && \
     rm -rf /var/lib/apt/lists/*
 
-# Install npm
-RUN curl -sL https://deb.nodesource.com/setup_8.x | bash - && apt-get install -y nodejs
-
 # Copy select files needed for installing requirements.
 # We only copy what we need here so small changes to the repository does not trigger re-installation of the requirements.
 COPY requirements.txt .
-COPY requirements_test.txt .
-COPY scripts/install_requirements.sh scripts/install_requirements.sh
-RUN INSTALL_TEST_REQUIREMENTS="true" ./scripts/install_requirements.sh
-RUN pip install --no-cache-dir -q http://download.pytorch.org/whl/cu80/torch-0.2.0.post3-cp36-cp36m-manylinux1_x86_64.whl
+RUN pip install -r requirements.txt
 
-# Build demo
-COPY demo/ demo/
-RUN cd demo && npm install && npm run build && cd ..
-
-COPY allennlp/ allennlp/
-COPY tests/ tests/
-COPY pytest.ini pytest.ini
 COPY scripts/ scripts/
+COPY allennlp/ allennlp/
+COPY pytest.ini pytest.ini
+COPY .flake8 .flake8
 COPY tutorials/ tutorials/
 COPY training_config training_config/
+COPY setup.py setup.py
+COPY README.md README.md
 
-# Run tests to verify the Docker build
-RUN PYTHONDONTWRITEBYTECODE=1 pytest
+RUN pip install --editable .
 
-# Add model caching
+# Compile EVALB - required for parsing evaluation.
+# EVALB produces scary looking c-level output which we don't
+# care about, so we redirect the output to /dev/null.
+RUN cd allennlp/tools/EVALB && make &> /dev/null && cd ../../../
+
+# Caching models when building the image makes a dockerized server start up faster, but is slow for
+# running tests and things, so we skip it by default.
 ARG CACHE_MODELS=false
 RUN ./scripts/cache_models.py
+
+
+# Optional argument to set an environment variable with the Git SHA
+ARG SOURCE_COMMIT
+ENV ALLENNLP_SOURCE_COMMIT $SOURCE_COMMIT
+
+# Copy wrapper script to allow beaker to run resumable training workloads.
+COPY scripts/ai2-internal/resumable_train.sh /stage/allennlp
 
 LABEL maintainer="allennlp-contact@allenai.org"
 
